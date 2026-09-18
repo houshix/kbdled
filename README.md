@@ -1,6 +1,6 @@
 # kbdled
 
-✨ kbdled lets you toggle a keyboard LED (Scroll Lock, by default) with a dedicated key — even on the login screen, before you've signed in. ✨
+✨ kbdled lets you toggle a keyboard LED (Scroll Lock, by default) with a dedicated key — even on the login screen, before you've signed in. It works well in generic keyboards ✨
 
 ⚠️ » kbdled reads your keyboard's raw input device and needs to run as root. See [Important Notes](#️-important-notes) before installing.
 
@@ -10,7 +10,7 @@ A shortcut bound inside GNOME/KDE/etc. only exists while that session is open �
 
 🤔 What else does it do?
 
- Interactive arrow-key wizard (Space, Enter, or numpad Enter to confirm) — just run `kbdled` with no arguments;
+ just run `kbdled` with no arguments;
  Binds a single key or a key combination (hold two or more keys together, then release);
  Change the bound key later (`remap`) without a full reinstall;
  Survives the keyboard being unplugged and reconnected, or missing at boot;
@@ -37,9 +37,6 @@ go build -o kbdled .
 sudo ./kbdled
 ```
 
-Running `kbdled` with no arguments drops you into the wizard: pick **Install**, press
-and hold the key (or key combination) you want to use, then release it. Remap and
-Uninstall show up grayed out until something is actually installed.
 
 🎛️ Usage
 
