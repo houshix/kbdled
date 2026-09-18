@@ -8,13 +8,10 @@ const (
 	serviceName = "kbdled.service"
 )
 
-// No After= here on purpose: After=multi-user.target combined with
-// WantedBy=multi-user.target is an ordering cycle (systemd breaks it by
-// dropping the After=, which silently defeats the "be up before login"
-// goal). WantedBy alone already starts this at the same point in boot as
-// everything else pulled in by multi-user.target - which is what we want,
-// since display managers (SDDM/GDM/LightDM) start later, in
-// graphical.target.
+// No After=: combined with WantedBy=multi-user.target it would form an
+// ordering cycle, which systemd breaks by dropping After= anyway.
+// WantedBy alone starts this alongside multi-user.target, before display
+// managers (graphical.target).
 const unitContent = `[Unit]
 Description=Keyboard LED Toggle Daemon
 StartLimitIntervalSec=30

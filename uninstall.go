@@ -7,10 +7,8 @@ import (
 
 func cmdUninstall() {
 	requireRoot()
-	pickLanguage()
 
-	// Load before deleting the config: we need OriginalTriggers to put
-	// the kernel's own LED behavior back the way it was.
+	// Load first: need OriginalTriggers to restore LED behavior.
 	cfg, err := loadConfig()
 
 	if err := run("systemctl", "disable", "--now", serviceName); err != nil {
@@ -31,5 +29,5 @@ func cmdUninstall() {
 		warn("systemctl daemon-reload failed: " + err.Error())
 	}
 
-	fmt.Println(t("uninstall_done"))
+	fmt.Println("Removed: service stopped, LED reset, all files deleted.")
 }

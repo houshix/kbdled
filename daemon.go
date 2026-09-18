@@ -7,14 +7,10 @@ import (
 	"time"
 )
 
-// reassertInterval is a low-frequency safety net on top of the reactive
-// EV_LED handling, in case some driver/keyboard combination doesn't
-// surface a clean EV_LED event for a resync we need to undo.
+// reassertInterval is a backup poll in case an EV_LED resync is missed.
 const reassertInterval = 2 * time.Second
 
-// reconnectDelay is how long to wait between attempts to (re)open the
-// configured device, both when it's missing at startup and when it goes
-// away while running.
+// reconnectDelay is the wait between attempts to (re)open the device.
 const reconnectDelay = 2 * time.Second
 
 func cmdDaemon() {
@@ -23,22 +19,21 @@ func cmdDaemon() {
 		fmt.Fprintln(os.Stderr, "no configuration found, run 'sudo kbdled install' first:", err)
 		os.Exit(1)
 	}
+	if len(cfg.Keycodes) == 0 {
+		fmt.Fprintln(os.Stderr, "no key combination configured (old config format?), run 'sudo kbdled install' again")
+		os.Exit(1)
+	}
 
-	// This loop normally never exits: a missing or disconnected keyboard
-	// is handled by waiting and reconnecting in-process, rather than by
-	// exiting and relying on systemd to restart the whole service. That
-	// matters because a keyboard that's still unplugged a few seconds
-	// after boot would otherwise make the daemon fail repeatedly in a
-	// short window and trip systemd's restart rate limit, requiring a
-	// fresh reboot (with the keyboard already connected) to recover.
+	// Never exits: reconnects in-process instead of relying on systemd
+	// restarts, which could hit the rate limit if unplugged at boot.
 	for {
 		runOnce(cfg)
 		time.Sleep(reconnectDelay)
 	}
 }
 
-// runOnce waits for the configured device, applies the desired LED state,
-// and services it until it disconnects.
+// runOnce connects, applies the LED state, and serves events until the
+// device disconnects.
 func runOnce(cfg *Config) {
 	f := waitForDevice(cfg.Device)
 	defer f.Close()
@@ -47,9 +42,7 @@ func runOnce(cfg *Config) {
 		fmt.Fprintln(os.Stderr, "warning: no matching LED found under /sys/class/leds")
 	}
 
-	// Every (re)connection gets a fresh sysfs LED node (unplugging a USB
-	// keyboard destroys the old one), so this needs to run again here,
-	// not just once at process startup.
+	// Reconnecting gets a fresh sysfs LED node, so redo this each time.
 	disableTriggersAndRemember(cfg)
 
 	state := loadState()
@@ -58,7 +51,7 @@ func runOnce(cfg *Config) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events := make(chan daemonEvent)
-	go watchDaemonEvents(ctx, f, cfg.Keycode, events)
+	go watchDaemonEvents(ctx, f, cfg.Keycodes, events)
 
 	ticker := time.NewTicker(reassertInterval)
 	defer ticker.Stop()
@@ -88,9 +81,7 @@ func runOnce(cfg *Config) {
 	}
 }
 
-// waitForDevice retries opening the configured input device until it
-// appears - covers both a keyboard that's still unplugged when the daemon
-// starts and one that gets unplugged and later reconnected.
+// waitForDevice retries until the input device appears.
 func waitForDevice(path string) *os.File {
 	for {
 		if f, err := os.Open(path); err == nil {

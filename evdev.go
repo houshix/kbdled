@@ -7,19 +7,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 )
 
-// struct input_event layout on Linux (x86/ARM, 64-bit):
-//
-//	struct timeval time (tv_sec int64 + tv_usec int64) = 16 bytes
-//	__u16 type, __u16 code, __s32 value                = 8 bytes
-//
-// Total = 24 bytes. Fields are read at fixed byte offsets instead of via a
-// Go struct, so this doesn't depend on how Go would pad/align the struct.
+// Linux input_event layout (x86/ARM, 64-bit): timeval (16 bytes) + type,
+// code, value (8 bytes) = 24 bytes total. Read by offset, not a Go struct,
+// to avoid depending on Go's own padding rules.
 const (
 	evKey         = 1
-	evLED         = 0x11 // reported whenever the kernel changes any LED on this device
+	evLED         = 0x11 // LED state change
 	inputEventLen = 24
 )
 
@@ -28,19 +25,43 @@ var (
 	ErrKeyTimeout     = errors.New("no key press detected before timeout")
 )
 
-type keyPress struct {
-	device  string
-	keycode uint16
+type comboResult struct {
+	device   string
+	keycodes []uint16
 }
 
-// watchDeviceForKeypress reads one /dev/input/eventX until it sees a key
-// press (value == 1) with a plausible keyboard code (code < 256, excluding
-// the BTN_* range used by mice/joysticks), then sends it on out.
-//
-// Used only during "install"/"remap": it's a blocking read, so devices that
-// lose the race stay blocked in I/O until the (short-lived) process exits -
-// acceptable for a one-shot CLI command.
-func watchDeviceForKeypress(ctx context.Context, path string, out chan<- keyPress) {
+// captureKeyCombo waits for a key chord on whichever /dev/input/eventN
+// reports the first plausible key press (code < 256, excludes mouse/
+// joystick BTN_* codes). That device then tracks all further presses
+// until the first release, which ends capture and returns the combo.
+func captureKeyCombo(timeout time.Duration) (device string, keycodes []uint16, err error) {
+	devices, _ := filepath.Glob("/dev/input/event*")
+	if len(devices) == 0 {
+		return "", nil, ErrNoInputDevices
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var won int32
+	resultCh := make(chan comboResult, 1)
+	for _, dev := range devices {
+		go captureOnDevice(ctx, dev, &won, resultCh)
+	}
+
+	select {
+	case r := <-resultCh:
+		return r.device, r.keycodes, nil
+	case <-ctx.Done():
+		return "", nil, ErrKeyTimeout
+	}
+}
+
+// captureOnDevice reads one device. The first goroutine to see a
+// qualifying press claims the race via `won` and tracks the combo;
+// losers exit immediately. Non-matching devices (mice, etc.) block until
+// process exit, which is fine for a short-lived CLI step.
+func captureOnDevice(ctx context.Context, path string, won *int32, out chan<- comboResult) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -48,6 +69,9 @@ func watchDeviceForKeypress(ctx context.Context, path string, out chan<- keyPres
 	defer f.Close()
 
 	buf := make([]byte, inputEventLen)
+	var pressed []uint16
+	claimed := false
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -61,9 +85,30 @@ func watchDeviceForKeypress(ctx context.Context, path string, out chan<- keyPres
 		code := binary.LittleEndian.Uint16(buf[18:20])
 		value := int32(binary.LittleEndian.Uint32(buf[20:24]))
 
-		if evType == evKey && value == 1 && code < 256 {
+		if evType != evKey || code >= 256 {
+			continue
+		}
+
+		if !claimed {
+			if value != 1 {
+				continue
+			}
+			if !atomic.CompareAndSwapInt32(won, 0, 1) {
+				return // lost the race
+			}
+			claimed = true
+			pressed = append(pressed, code)
+			continue
+		}
+
+		switch value {
+		case 1: // another key joined the combo
+			if !containsCode(pressed, code) {
+				pressed = append(pressed, code)
+			}
+		case 0: // any release ends the combo
 			select {
-			case out <- keyPress{device: path, keycode: code}:
+			case out <- comboResult{device: path, keycodes: pressed}:
 			case <-ctx.Done():
 			}
 			return
@@ -71,54 +116,43 @@ func watchDeviceForKeypress(ctx context.Context, path string, out chan<- keyPres
 	}
 }
 
-// captureKeypress listens on every /dev/input/eventN at once and returns the
-// first key press detected, or a sentinel error.
-func captureKeypress(timeout time.Duration) (keyPress, error) {
-	devices, _ := filepath.Glob("/dev/input/event*")
-	if len(devices) == 0 {
-		return keyPress{}, ErrNoInputDevices
+func containsCode(list []uint16, c uint16) bool {
+	for _, v := range list {
+		if v == c {
+			return true
+		}
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	out := make(chan keyPress, 1)
-	for _, dev := range devices {
-		go watchDeviceForKeypress(ctx, dev, out)
-	}
-
-	select {
-	case kp := <-out:
-		return kp, nil
-	case <-ctx.Done():
-		return keyPress{}, ErrKeyTimeout
-	}
+	return false
 }
 
 // daemonEvent distinguishes what watchDaemonEvents saw on the wire.
 type daemonEvent int
 
 const (
-	// evToggle: the configured key was pressed - flip the LED.
-	evToggle daemonEvent = iota
-	// evLEDChanged: the kernel changed some LED on this device on its
-	// own (this is what Caps/Num Lock resyncing all three lock LEDs
-	// together looks like from here) - check ours still matches what we
-	// want and fix it if not.
-	evLEDChanged
+	evToggle     daemonEvent = iota // combo fully held: flip the LED
+	evLEDChanged                    // kernel changed a LED; re-check ours
 )
 
-// watchDaemonEvents is the daemon's continuous reader: it keeps reading the
-// already-connected device forever and reports every press of the
-// configured keycode, plus every EV_LED event (which is how we notice the
-// kernel clobbering our LED when Caps/Num Lock changes - there's no sysfs
-// switch to stop that resync, so reacting to it here is the actual fix).
-// It closes the channel if the device disappears (e.g. a USB keyboard
-// unplugged); the caller is expected to reconnect rather than treat this
-// as fatal.
-func watchDaemonEvents(ctx context.Context, f *os.File, keycode uint16, out chan<- daemonEvent) {
+// watchDaemonEvents tracks the configured keycodes and reports evToggle on
+// the rising edge of "all held" (no retrigger while held). It also reports
+// every EV_LED event, since that's the only way to catch the kernel
+// clobbering our LED on Caps/Num Lock. Closes the channel on disconnect;
+// the caller should reconnect, not treat it as fatal.
+func watchDaemonEvents(ctx context.Context, f *os.File, keycodes []uint16, out chan<- daemonEvent) {
 	defer close(out)
 	buf := make([]byte, inputEventLen)
+	pressed := make(map[uint16]bool, len(keycodes))
+	wasAllHeld := false
+
+	allHeld := func() bool {
+		for _, k := range keycodes {
+			if !pressed[k] {
+				return false
+			}
+		}
+		return true
+	}
+
 	for {
 		if _, err := io.ReadFull(f, buf); err != nil {
 			return
@@ -127,27 +161,36 @@ func watchDaemonEvents(ctx context.Context, f *os.File, keycode uint16, out chan
 		code := binary.LittleEndian.Uint16(buf[18:20])
 		value := int32(binary.LittleEndian.Uint32(buf[20:24]))
 
-		var ev daemonEvent
 		switch {
-		case evType == evKey && code == keycode && value == 1:
-			ev = evToggle
-		case evType == evLED:
-			ev = evLEDChanged
-		default:
-			continue
-		}
+		case evType == evKey && code < 256:
+			switch value {
+			case 1:
+				pressed[code] = true
+			case 0:
+				pressed[code] = false
+			}
+			nowAllHeld := allHeld()
+			if nowAllHeld && !wasAllHeld {
+				select {
+				case out <- evToggle:
+				case <-ctx.Done():
+					return
+				}
+			}
+			wasAllHeld = nowAllHeld
 
-		select {
-		case out <- ev:
-		case <-ctx.Done():
-			return
+		case evType == evLED:
+			select {
+			case out <- evLEDChanged:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }
 
-// stablePath resolves a /dev/input/eventN to a path that survives reboots
-// (by-id first, by-path as a fallback). Without this, the eventN number can
-// change and the daemon loses track of the configured device.
+// stablePath resolves eventN to a reboot-stable path (by-id, then
+// by-path); eventN numbering can change across boots.
 func stablePath(eventPath string) string {
 	for _, dir := range []string{"/dev/input/by-id", "/dev/input/by-path"} {
 		entries, err := os.ReadDir(dir)
@@ -165,6 +208,6 @@ func stablePath(eventPath string) string {
 			}
 		}
 	}
-	warn(t("no_stable_path", eventPath))
+	warn("warning: no stable path (by-id/by-path) found for " + eventPath + "; the device name may change across reboots")
 	return eventPath
 }

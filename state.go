@@ -5,8 +5,7 @@ import (
 	"strings"
 )
 
-// /run is tmpfs and is cleared on reboot, like /tmp - but it isn't
-// world-writable, so another local user can't tamper with your LED state.
+// /run is tmpfs, cleared on reboot, and not world-writable like /tmp.
 const statePath = "/run/kbdled.state"
 
 func loadState() int {

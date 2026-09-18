@@ -7,17 +7,12 @@ import (
 
 const configPath = "/etc/kbdled/config.json"
 
-// Config holds the input device (stable path) and keycode chosen during
-// "install" or "remap".
+// Config is the persisted setup: input device, key combo, and each LED's
+// original trigger (for uninstall to restore).
 type Config struct {
-	Device  string `json:"device"`
-	Keycode uint16 `json:"keycode"`
-	// Lang remembers the wizard's last chosen language, so re-running
-	// install/remap/uninstall pre-selects it instead of defaulting to English.
-	Lang string `json:"lang,omitempty"`
-	// OriginalTriggers maps an LED's sysfs directory to the trigger name
-	// the kernel had assigned before we switched it to "none", so
-	// uninstall can restore normal keyboard LED behavior.
+	Device   string   `json:"device"`
+	Keycodes []uint16 `json:"keycodes"`
+	// OriginalTriggers: LED sysfs dir -> its trigger before we set "none".
 	OriginalTriggers map[string]string `json:"original_triggers,omitempty"`
 }
 

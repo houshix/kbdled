@@ -1,6 +1,6 @@
 # kbdled
 
-✨ kbdled lets you toggle a keyboard LED in Linux (Scroll Lock, by default) with a dedicated key — even on the login screen, before you've signed in. It works well on generic keyboards.✨
+✨ kbdled lets you toggle a keyboard LED (Scroll Lock, by default) with a dedicated key — even on the login screen, before you've signed in. ✨
 
 ⚠️ » kbdled reads your keyboard's raw input device and needs to run as root. See [Important Notes](#️-important-notes) before installing.
 
@@ -10,8 +10,8 @@ A shortcut bound inside GNOME/KDE/etc. only exists while that session is open �
 
 🤔 What else does it do?
 
- Interactive setup wizard, arrow-key selectable, in 6 languages (English, Português, Español, Deutsch, Français, 中文);
- Remembers your chosen wizard language;
+ Interactive arrow-key wizard (Space, Enter, or numpad Enter to confirm) — just run `kbdled` with no arguments;
+ Binds a single key or a key combination (hold two or more keys together, then release);
  Change the bound key later (`remap`) without a full reinstall;
  Survives the keyboard being unplugged and reconnected, or missing at boot;
  Fixes the kernel resyncing Caps/Num Lock and stomping on your LED;
@@ -25,7 +25,7 @@ A shortcut bound inside GNOME/KDE/etc. only exists while that session is open �
 2. Unzip it and run:
 ```bash
 unzip kbdled.zip
-sudo ./kbdled install
+sudo ./kbdled
 ```
 
 **Option B — build from source**
@@ -34,15 +34,19 @@ sudo apt install golang-go   # or your distro's equivalent
 git clone https://github.com/houshix/kbdled.git
 cd kbdled
 go build -o kbdled .
-sudo ./kbdled install
+sudo ./kbdled
 ```
 
-`install` asks your language, asks you to press the key you want to use, then installs and enables itself as a systemd service.
+Running `kbdled` with no arguments drops you into the wizard: pick **Install**, press
+and hold the key (or key combination) you want to use, then release it. Remap and
+Uninstall show up grayed out until something is actually installed.
 
 🎛️ Usage
+
+Prefer typing over navigating a menu? Every wizard option is also a direct command:
 ```bash
 sudo kbdled install     # first-time setup (see above)
-sudo kbdled remap       # change the key without a full reinstall
+sudo kbdled remap       # change the key/combination without a full reinstall
 sudo kbdled uninstall   # stop the service, reset the LED, remove all files
 ```
 
@@ -57,6 +61,7 @@ sudo kbdled uninstall   # stop the service, reset the LED, remove all files
  **Needs root** — it reads a raw input device and writes to systemd/sysfs;
  **Doesn't grab the key exclusively** (no `EVIOCGRAB`) — it still reaches your desktop session too, so remove any existing shortcut bound to the same key;
  **Binds to one keyboard** — whichever one you press the key on during `install`/`remap`;
+ **`Fn` probably won't work** — it's usually consumed by the keyboard's own firmware before the OS ever sees a key event for it, so a combination involving `Fn` likely won't register;
  **64-bit only** — the raw event parsing assumes the 64-bit `input_event` layout;
  Defaults to the Scroll Lock LED; edit `scrollLockLEDs` in `led.go` and rebuild to target Caps or Num Lock instead.
 

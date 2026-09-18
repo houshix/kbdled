@@ -22,8 +22,8 @@ func setLED(value int) {
 	}
 }
 
-// readCurrentTrigger returns the LED trigger currently marked active in
-// its sysfs "trigger" file, e.g. "none kbd-scrollock [rc-feedback]" -> "rc-feedback".
+// readCurrentTrigger returns the active trigger name from the LED's
+// sysfs "trigger" file, e.g. "none [kbd-scrollock] rc-feedback" -> "kbd-scrollock".
 func readCurrentTrigger(ledDir string) string {
 	data, err := os.ReadFile(filepath.Join(ledDir, "trigger"))
 	if err != nil {
@@ -37,14 +37,10 @@ func readCurrentTrigger(ledDir string) string {
 	return ""
 }
 
-// disableTriggersAndRemember switches every scroll-lock LED's trigger to
-// "none", so the kernel stops driving it on its own (it otherwise resyncs
-// all three lock LEDs together whenever Caps/Num Lock state changes,
-// clobbering whatever we last wrote to brightness). The first time it sees
-// a real trigger for a given LED path, it records it on cfg so it can be
-// restored on uninstall - sysfs LED state doesn't survive a reboot, so
-// this needs to run once per daemon startup, and re-running it when the
-// trigger is already "none" is a harmless no-op.
+// disableTriggersAndRemember sets every scroll-lock LED's trigger to
+// "none" and records the original (once) on cfg for uninstall to restore.
+// sysfs trigger state resets on reboot, so this runs on every startup;
+// re-running when already "none" is a no-op.
 func disableTriggersAndRemember(cfg *Config) {
 	if cfg.OriginalTriggers == nil {
 		cfg.OriginalTriggers = map[string]string{}
@@ -65,13 +61,10 @@ func disableTriggersAndRemember(cfg *Config) {
 	}
 }
 
-// reassertLEDIfNeeded forces the LED back to 1 if the kernel turned it off.
-// This is the actual fix for Caps/Num Lock clobbering scroll lock's LED:
-// that resync happens in a lower-level kernel path (input-leds, which
-// re-syncs all three lock LEDs together on any of them changing) that
-// "trigger" has no effect on, so the only reliable fix is to notice it
-// happened and put our own value back. Called both reactively (on an
-// EV_LED event from the device) and from a low-frequency safety-net timer.
+// reassertLEDIfNeeded forces the LED back to 1 if the kernel turned it
+// off. Caps/Num Lock changes trigger a kernel-level resync of all lock
+// LEDs (input-leds) that "trigger" can't stop, so this is the actual fix
+// - called on EV_LED events and by a backup timer.
 func reassertLEDIfNeeded() {
 	for _, led := range scrollLockLEDs() {
 		data, err := os.ReadFile(filepath.Join(led, "brightness"))
@@ -84,9 +77,8 @@ func reassertLEDIfNeeded() {
 	}
 }
 
-// restoreTriggers puts back whatever trigger the kernel originally had on
-// each LED, so uninstalling this program doesn't leave the system's normal
-// keyboard LED behavior permanently disabled.
+// restoreTriggers puts back each LED's original trigger, so uninstall
+// doesn't leave keyboard LED behavior permanently disabled.
 func restoreTriggers(cfg *Config) {
 	for led, trig := range cfg.OriginalTriggers {
 		_ = os.WriteFile(filepath.Join(led, "trigger"), []byte(trig), 0644)

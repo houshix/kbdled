@@ -7,13 +7,10 @@ import (
 	"unsafe"
 )
 
-// Minimal raw-mode terminal handling for Linux (x86/ARM), just to read
-// arrow-key escape sequences one byte at a time for the interactive menu.
-// This intentionally avoids golang.org/x/term (and its transitive
-// dependency on golang.org/x/sys) to keep the module dependency-free -
-// the kernel's struct termios (used by the TCGETS/TCSETS ioctls) has had
-// this exact layout on every mainstream Linux architecture (x86, x86_64,
-// ARM, ARM64) for decades.
+// Raw-mode terminal handling for Linux (x86/ARM), reading input one byte
+// at a time. Avoids golang.org/x/term (and its x/sys dependency) to keep
+// the module dependency-free; this termios layout (for TCGETS/TCSETS) is
+// stable across mainstream Linux architectures.
 type termios struct {
 	Iflag uint32
 	Oflag uint32
@@ -40,9 +37,8 @@ func ioctlPtr(fd uintptr, req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
-// enableRawMode disables canonical mode and echo so keys - including arrow
-// key escape sequences - can be read one byte at a time instead of waiting
-// for a full line. Returns the original settings so they can be restored.
+// enableRawMode disables canonical mode and echo for byte-at-a-time
+// reads. Returns the original settings for restoreMode.
 func enableRawMode(fd uintptr) (*termios, error) {
 	var orig termios
 	if err := ioctlPtr(fd, tcgets, unsafe.Pointer(&orig)); err != nil {
@@ -62,9 +58,8 @@ func restoreMode(fd uintptr, orig *termios) {
 	_ = ioctlPtr(fd, tcsets, unsafe.Pointer(orig))
 }
 
-// restoreOnSignal makes sure Ctrl+C (or a kill) during the menu doesn't
-// leave the terminal stuck in raw mode. Call the returned cancel func once
-// the menu returns normally.
+// restoreOnSignal restores the terminal on Ctrl+C/kill during the menu.
+// Call the returned cancel func on normal return.
 func restoreOnSignal(fd uintptr, orig *termios) (cancel func()) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

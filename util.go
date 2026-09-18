@@ -6,8 +6,7 @@ import (
 	"os/exec"
 )
 
-// requireRoot is checked before the language picker: no point rendering an
-// interactive menu just to fail right after on a precondition.
+// requireRoot exits early, before any prompt, if not running as root.
 func requireRoot() {
 	if os.Geteuid() != 0 {
 		fmt.Fprintln(os.Stderr, "Error: this command must be run as root (sudo).")

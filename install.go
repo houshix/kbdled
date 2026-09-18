@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -13,23 +14,25 @@ const captureTimeout = 20 * time.Second
 
 func cmdInstall() {
 	requireRoot()
-	pickLanguage()
 
-	fmt.Println(t("press_key", int(captureTimeout.Seconds())))
-	kp, err := captureKeypress(captureTimeout)
+	fmt.Printf("Press and hold the key combination you want to use, then release (%ds window).\n", int(captureTimeout.Seconds()))
+	fmt.Println("Note: Fn is usually handled by the keyboard's own firmware, not the OS -")
+	fmt.Println("a combination that includes it likely won't be seen here.")
+
+	device, keycodes, err := captureKeyCombo(captureTimeout)
 	if err != nil {
 		reportCaptureError(err)
 		os.Exit(1)
 	}
 
-	device := stablePath(kp.device)
-	fmt.Println(t("key_captured", kp.keycode, device))
+	stable := stablePath(device)
+	fmt.Println("Captured:", comboName(keycodes), "on", stable)
 
 	if len(scrollLockLEDs()) == 0 {
-		warn(t("no_led_found"))
+		warn("warning: no matching LED found under /sys/class/leds (looking for *::scrolllock); the key will be captured, but nothing will light up until a matching LED exists")
 	}
 
-	cfg := &Config{Device: device, Keycode: kp.keycode, Lang: lang}
+	cfg := &Config{Device: stable, Keycodes: keycodes}
 	if err := saveConfig(cfg); err != nil {
 		fatal("saving config", err)
 	}
@@ -50,27 +53,34 @@ func cmdInstall() {
 	}
 
 	fmt.Println()
-	fmt.Println(t("install_done"))
-	fmt.Println(t("shortcut_note"))
+	fmt.Println("Installation complete. The key now works even on the login screen (SDDM/GDM/LightDM).")
+	fmt.Println("If this combination is already bound to a shortcut in your desktop environment,")
+	fmt.Println("remove that binding - this program now captures it directly, and both would fire together.")
+}
+
+// comboName joins keycode names, e.g. "Left Ctrl + Scroll Lock".
+func comboName(codes []uint16) string {
+	names := make([]string, len(codes))
+	for i, c := range codes {
+		names[i] = keyName(c)
+	}
+	return strings.Join(names, " + ")
 }
 
 func reportCaptureError(err error) {
 	switch {
 	case errors.Is(err, ErrNoInputDevices):
-		warn(t("no_input_device"))
+		warn("No input device found under /dev/input")
 	case errors.Is(err, ErrKeyTimeout):
-		warn(t("no_key_detected", captureTimeout))
+		warn("No key press detected within " + captureTimeout.String())
 	default:
 		warn(err.Error())
 	}
 }
 
-// installBinary copies the running executable to /usr/local/bin, unless
-// it's already installed there. It writes to a temp file and renames it
-// into place rather than truncating the target in place: renaming swaps
-// the directory entry atomically without touching the inode a running
-// process has open, avoiding ETXTBSY if kbdled is somehow re-run from the
-// very path it's about to install to under a different name.
+// installBinary copies the running executable to /usr/local/bin. Writes
+// to a temp file and renames into place (atomic, avoids ETXTBSY on a
+// running binary) rather than truncating the target directly.
 func installBinary() error {
 	self, err := os.Executable()
 	if err != nil {
@@ -114,7 +124,7 @@ func sameFile(a, b string) (bool, error) {
 	}
 	fb, err := os.Stat(b)
 	if err != nil {
-		return false, nil // target doesn't exist yet, so it can't be the same file
+		return false, nil // target missing
 	}
 	return os.SameFile(fa, fb), nil
 }
